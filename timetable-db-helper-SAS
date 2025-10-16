@@ -1,0 +1,633 @@
+<?php
+/** 
+ * Plugin Name: Timetable Display
+ * Plugin URI: https://user18.delovna.finki.ukim.mk
+ * Description: Display timetables based on destination and date selection
+ * Author: Angela
+*/
+
+if (!defined('ABSPATH')) {
+    exit;
+}
+
+/** 
+ * Main function to display the timetable search form and results (shortcode)
+*/
+
+function timetable_display_form() {
+    global $wpdb;
+    
+    //tables from DB
+    $destinations_table = 'destinations';
+    $companies_table = 'companies';
+    $timetables_table = 'bus_routes';
+    
+    //get all destinations for dropdown
+    $destinations = $wpdb->get_results("
+    SELECT id, name
+    FROM $destinations_table
+    ORDER BY name ASC
+    ");
+    
+    ob_start();
+ ?>
+ 
+ <!-- Search Form Container -->
+ <div class="timetable-search-wrapper">
+     <div class="timetable-form-container">
+         <!--<h2>Search Timetables</h2>-->
+         <form method="GET" action="" class="timetable-search-form">
+             
+             <!-- Destination dropdown -->
+             <div class="form-group">
+                 <label for="place">
+                     <span class="label-icon">📍</span>
+                     Select Destination:
+                 </label>
+                 
+                 <select name="place" id="place" required>
+                     <option value="">-- Choose Destination --</option>
+                     <?php foreach ($destinations as $dest): ?>
+                        <option value="<?php echo esc_attr($dest->id); ?>"
+                            <?php selected(isset($_GET['place']) && $_GET['place'] == $dest->id); ?>>
+                            <?php echo esc_html($dest->name); ?>
+                        </option>
+                     <?php endforeach; ?>
+                 </select>
+             </div>
+             
+             <!-- Date Selection -->
+             <div class="form-group">
+                 <label for="travel_date">
+                     <span class="label-icon"></span>
+                     Select Date:
+                 </label>
+                 <input type="date"
+                        name="travel_date"
+                        id="travel_date"
+                        value="<?php echo isset($_GET['travel_date']) ? esc_attr($_GET['travel_date']) : date('Y-m-d'); ?>"
+                        min="<?php echo date('Y-m-d'); ?>" 
+                        required> 
+             </div>
+             
+             <!-- Submit Button --> 
+             <div class="form-group">
+                 <button type="submit" class="search-button">
+                     <span></span> 
+                     Search Timetables
+                 </button>
+             </div>
+             
+         </form>
+     </div>
+     
+     <?php
+     //processing the search when the form is submitted
+     if (isset($_GET['place']) && isset($_GET['travel_date'])) {
+         
+         //extract input values
+         $place_id = intval($_GET['place']);
+         $travel_date = sanitize_text_field($_GET['travel_date']);
+         
+         //determine if the selected date is weekday or weekend
+         $day_of_week = date('N', strtotime($travel_date));
+         $is_weekend = ($day_of_week >= 6 );
+         
+         //set the flag column to check based on day type
+         $flag_column = $is_weekend ? 'operates_weekend' : 'operates_weekday';
+         
+         //getting the destination name
+         $destination_name = $wpdb->get_var($wpdb->prepare(
+             "SELECT name FROM $destinations_table WHERE id = %d",
+             $place_id
+         ));
+         
+         //Query to get timetables
+         $query = $wpdb->prepare("
+            SELECT 
+                t.id,
+                t.departure_time,
+                t.one_way_price,
+                t.return_price,
+                d.name AS destination_name,
+                c.name AS company_name
+            FROM bus_routes t
+            LEFT JOIN destinations d ON t.destination_id = d.id
+            LEFT JOIN companies c ON t.company_id = c.id
+            WHERE t.destination_id = %d
+            AND t.$flag_column = 1
+            ORDER BY t.departure_time ASC
+         ", $place_id);
+         
+         $results = $wpdb->get_results($query);
+         
+         $formatted_date = date('l, F j, Y', strtotime($travel_date));
+         $day_type = $is_weekend ? 'Weekend' : "Weekday";
+         
+         ?>
+         
+         <!-- Results Section -->
+         <div class="timetable-results-section">
+             <!-- Search Summary -->
+             <div class="search-summary">
+                 <h3>Timetables for <?php echo esc_html($destination_name); ?></h3>
+                 <div class="summary-details">
+                     <span class="detail-item">
+                         <strong>Date: </strong> <?php echo esc_html($formatted_date); ?>
+                     </span>
+                     <span class="detail-item">
+                         <strong>Day Type: </strong> <?php echo esc_html($day_type); ?>
+                     </span>
+                     <span class="detail-item">
+                         <strong>Results: </strong> <?php echo count($results); ?> found
+                     </span>
+                 </div>
+             </div>
+             
+             
+             <?php if ($results): ?>
+             <!-- Results Table -->
+             
+             <div class="table-container">
+                 <table class="timetable-table">
+                     <thead>
+                         <tr>
+                             <th>Departure</th>
+                             <th>Destination</th>
+                             <th>Company</th>
+                             <th>One way price</th>
+                             <th>Return price</th>
+                         </tr>
+                     </thead>
+                     <tbody>
+                         <?php foreach ($results as $row): ?>
+                            <tr>
+                                <td class="time">
+                                    <?php echo esc_html(date('g:i A', strtotime($row->departure_time))); ?>
+                                </td>
+                                <td class="destination-name">
+                                    <?php echo esc_html($row->destination_name); ?>
+                                </td>
+                                <td class="company-name">
+                                    <?php echo esc_html($row->company_name); ?>
+                                </td>
+                                <td class="price">
+                                    <?php echo esc_html(number_format($row->one_way_price, 0)); ?> MKD
+                                </td>
+                                <td class="price">
+                                    <?php echo esc_html(number_format($row->return_price, 0)); ?> MKD
+                                </td>
+                            </tr>
+                         <?php endforeach; ?>
+                     </tbody>
+                 </table>
+             </div>
+             
+              <div class="action-buttons">
+                 <button onclick="window.print()" class="btn-print"> Print Timetable</button>
+                 <button onclick="exportToCSV()" class="btn-export"> Export as CSV</button>
+              </div>
+              
+            <?php else: ?>
+                <!-- No Results Message -->
+                <div class="no-results">
+                    <div class="no-results-icon"></div>
+                    <h4>No Timetables Found</h4>
+                    <p>Sorry, there are no timetables available for <strong><?php echo esc_html($destination_name); ?></strong> on <strong><?php echo esc_html($formatted_date); ?></strong>.</p>
+                    <p>This could be because:</p>
+                    <ul>
+                        <li>No services operate on this day</li>
+                        <li>The route may be temporarily suspended</li>
+                        <li>The schedule hasn't been updated yet</li>
+                    </ul>
+                    <button onclick="location.reload()" class="btn-try-again">Try Another Search</button>
+                </div>
+                <?php endif; ?>
+                    
+         </div>
+         <?php
+     }
+     ?>
+ </div>
+ 
+ <!-- JS for Export Functionality-->
+ <script>
+    function exportToCSV() {
+        let table = document.querySelector('.timetable-table');
+        let rows = table.querySelectorAll('tr');
+        let csv = [];
+        
+        for (let i = 0; i < rows.length; i++) {
+            let row = [];
+            let cols = rows[i].querySelectorAll('td, th');
+            
+            for (let j = 0; j < cols.length; j++) {
+                // Clean the text and handle commas
+                let text = cols[j].innerText.replace(/,/g, ';');
+                row.push('"' + text + '"');
+            }
+            
+            csv.push(row.join(','));
+        }
+        
+        // Create download link
+        let csvContent = csv.join('\n');
+        let blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+        let link = document.createElement('a');
+        let url = URL.createObjectURL(blob);
+        
+        link.setAttribute('href', url);
+        link.setAttribute('download', 'timetable_' + new Date().getTime() + '.csv');
+        link.style.visibility = 'hidden';
+        
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+    }
+    </script>
+    
+    <?php
+    return ob_get_clean();
+}
+
+//Register the short code 
+add_shortcode('timetable_search', 'timetable_display_form');
+
+/** 
+ * CSS for styling
+*/
+function timetable_display_styles() {
+    ?>
+    <style>
+        /* Main Container */
+        .timetable-search-wrapper {
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 20px;
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, sans-serif;
+        }
+        
+        /* Form Container */
+        .timetable-form-container {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            padding: 30px;
+            border-radius: 15px;
+            box-shadow: 0 10px 40px rgba(0, 0, 0, 0.1);
+            margin-bottom: 30px;
+        }
+        
+        .timetable-form-container h2 {
+            color: white;
+            margin-bottom: 25px;
+            text-align: center;
+            font-size: 28px;
+        }
+        
+        /* Form Styling */
+        .timetable-search-form {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+            gap: 20px;
+            align-items: end;
+        }
+        
+        .form-group {
+            display: flex;
+            flex-direction: column;
+        }
+        
+        .form-group label {
+            color: white;
+            margin-bottom: 8px;
+            font-weight: 500;
+            font-size: 14px;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+        
+        .label-icon {
+            margin-right: 5px;
+        }
+        
+        .form-group select,
+        .form-group input[type="date"] {
+            padding: 12px 15px;
+            border: none;
+            border-radius: 8px;
+            font-size: 16px;
+            background: white;
+            color: #333;
+            transition: all 0.3s ease;
+        }
+        
+        .form-group select:focus,
+        .form-group input[type="date"]:focus {
+            outline: none;
+            box-shadow: 0 0 0 3px rgba(255, 255, 255, 0.3);
+        }
+        
+        /* Search Button */
+        .search-button {
+            background: white;
+            color: #667eea;
+            padding: 12px 30px;
+            border: none;
+            border-radius: 8px;
+            font-size: 16px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 8px;
+        }
+        
+        .search-button:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 5px 20px rgba(0, 0, 0, 0.1);
+        }
+        
+        /* Search Summary */
+        .search-summary {
+            background: #f8f9fa;
+            padding: 20px;
+            border-radius: 10px;
+            margin-bottom: 25px;
+        }
+        
+        .search-summary h3 {
+            color: #333;
+            margin-bottom: 10px;
+            font-size: 24px;
+        }
+        
+        .summary-details {
+            display: flex;
+            gap: 30px;
+            flex-wrap: wrap;
+        }
+        
+        .detail-item {
+            color: #666;
+            font-size: 14px;
+        }
+        
+        .detail-item strong {
+            color: #333;
+        }
+        
+        /* Table Container */
+        .table-container {
+            background: white;
+            border-radius: 10px;
+            overflow: hidden;
+            box-shadow: 0 5px 20px rgba(0, 0, 0, 0.1);
+            overflow-x: auto;
+        }
+        
+        /* Table Styling */
+        .timetable-table {
+            width: 100%;
+            border-collapse: collapse;
+        }
+        
+        .timetable-table thead {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        }
+        
+        .timetable-table th {
+            color: white;
+            padding: 15px;
+            text-align: left;
+            font-weight: 600;
+            font-size: 14px;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+        
+        .timetable-table tbody tr {
+            border-bottom: 1px solid #e9ecef;
+            transition: all 0.3s ease;
+        }
+        
+        .timetable-table tbody tr:hover {
+            background: #f8f9fa;
+        }
+        
+        .timetable-table td {
+            padding: 15px;
+            color: #495057;
+            font-size: 15px;
+        }
+        
+        .company-name {
+            font-weight: 600;
+            color: #333;
+        }
+        
+        .destination-name {
+            font-weight: 500;
+            color: #495057;
+        }
+        
+        .time {
+            font-weight: 500;
+            color: #667eea;
+        }
+        
+        .price {
+            font-weight: 600;
+            color: #28a745;
+            font-size: 16px;
+        }
+        
+        /* Action Buttons */
+        .action-buttons {
+            display: flex;
+            gap: 15px;
+            margin-top: 25px;
+            justify-content: center;
+        }
+        
+        .btn-print,
+        .btn-export {
+            padding: 10px 25px;
+            border: none;
+            border-radius: 8px;
+            font-size: 14px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.3s ease;
+        }
+        
+        .btn-print {
+            background: #6c757d;
+            color: white;
+        }
+        
+        .btn-export {
+            background: #28a745;
+            color: white;
+        }
+        
+        .btn-print:hover,
+        .btn-export:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 5px 15px rgba(0, 0, 0, 0.1);
+        }
+        
+        /* No Results Styling */
+        .no-results {
+            background: white;
+            padding: 50px;
+            border-radius: 10px;
+            text-align: center;
+            box-shadow: 0 5px 20px rgba(0, 0, 0, 0.1);
+        }
+        
+        .no-results-icon {
+            font-size: 60px;
+            margin-bottom: 20px;
+        }
+        
+        .no-results h4 {
+            color: #333;
+            font-size: 24px;
+            margin-bottom: 15px;
+        }
+        
+        .no-results p {
+            color: #666;
+            margin-bottom: 10px;
+        }
+        
+        .no-results ul {
+            list-style: none;
+            padding: 0;
+            margin: 20px 0;
+        }
+        
+        .no-results ul li {
+            color: #666;
+            margin: 5px 0;
+            padding-left: 20px;
+            position: relative;
+        }
+        
+        .no-results ul li:before {
+            content: "•";
+            position: absolute;
+            left: 0;
+            color: #667eea;
+        }
+        
+        .btn-try-again {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 12px 30px;
+            border: none;
+            border-radius: 8px;
+            font-size: 16px;
+            font-weight: 600;
+            cursor: pointer;
+            margin-top: 20px;
+            transition: all 0.3s ease;
+        }
+        
+        .btn-try-again:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 5px 20px rgba(0, 0, 0, 0.1);
+        }
+        
+        /* Responsive Design */
+        @media (max-width: 768px) {
+            .timetable-search-form {
+                grid-template-columns: 1fr;
+            }
+            
+            .summary-details {
+                flex-direction: column;
+                gap: 10px;
+            }
+            
+            .action-buttons {
+                flex-direction: column;
+            }
+            
+            .table-container {
+                overflow-x: scroll;
+            }
+            
+            .timetable-table {
+                min-width: 600px;
+            }
+        }
+        
+        /* Print Styles */
+        @media print {
+            .timetable-form-container,
+            .action-buttons,
+            .btn-try-again {
+                display: none;
+            }
+            
+            .timetable-table {
+                border: 1px solid #000;
+            }
+            
+            .timetable-table th,
+            .timetable-table td {
+                border: 1px solid #000;
+            }
+        }
+    </style>
+    <?php
+}
+add_action('wp_head', 'timetable_display_styles');
+
+/**
+ * Activation Hooks
+*/
+function timetable_plugin_activate() {
+    // Check if required tables exist
+    global $wpdb;
+    
+    $required_tables = array(
+        'bus_routes',
+        'destinations', 
+        'companies'
+    );
+    
+    $missing_tables = array();
+    
+    foreach ($required_tables as $table) {
+        $table_exists = $wpdb->get_var("SHOW TABLES LIKE '$table'");
+        if (!$table_exists) {
+            $missing_tables[] = $table;
+        }
+    }
+    
+    if (!empty($missing_tables)) {
+        // Store admin notice
+        set_transient('timetable_plugin_activation_notice', $missing_tables, 60);
+    }
+}
+register_activation_hook(__FILE__, 'timetable_plugin_activate');
+
+/**
+ * Display admin notice if tables are missing
+ */
+function timetable_plugin_admin_notice() {
+    $missing_tables = get_transient('timetable_plugin_activation_notice');
+    
+    if ($missing_tables) {
+        echo '<div class="notice notice-warning is-dismissible">';
+        echo '<p><strong>Timetable Display Plugin:</strong> The following database tables are missing: ' . implode(', ', $missing_tables) . '</p>';
+        echo '<p>Please ensure these tables exist in your database for the plugin to work correctly.</p>';
+        echo '</div>';
+        
+        delete_transient('timetable_plugin_activation_notice');
+    }
+}
+add_action('admin_notices', 'timetable_plugin_admin_notice');
